@@ -1,17 +1,13 @@
 import express from "express";
+import { eq } from "drizzle-orm";
+import { db } from "./db.js";
+import { cars } from "./schema.js";
 
 const app = express();
 const PORT = 3000;
 
-const router = express.Router();
-
+// 1. Middleware
 app.use(express.json());
-
-let cars = [
-  { id: 1, make: "Toyota", model: "Camry", year: 2022, price: 28000 },
-  { id: 2, make: "Tesla", model: "Model S", year: 2023, price: 25000 },
-  { id: 3, make: "Ford", model: "F-150", year: 2021, price: 35000 },
-];
 
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
@@ -19,93 +15,107 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/", (req, res) => {
-  res.send("Hello from Car API!");
+// 2. Routes
+const router = express.Router();
+
+// GET all cars
+router.get("/", async (req, res) => {
+  try {
+    const allCars = await db.select().from(cars);
+    res.json(allCars);
+  } catch (error) {
+    res.status(500).json({ error: "Database connection failed" });
+  }
 });
 
-router.get("/cars", (req, res) => {
-  res.json(cars);
+// GET one car
+router.get("/:id", async (req, res) => {
+  try {
+    const carId = parseInt(req.params.id);
+    const [car] = await db
+      .select()
+      .from(cars)
+      .where(eq(cars.id, carId))
+      .limit(1);
+
+    if (!car) return res.status(404).json({ error: "Car not found" });
+    res.json(car);
+  } catch (error) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-router.post("/cars", (req, res) => {
+// POST new car
+router.post("/", async (req, res) => {
   const { make, model, year, price } = req.body;
 
   if (!make || !model || !year || !price) {
-    return res.status(400).json({
-      error: "Please provide make, model, year, and price",
-    });
+    return res.status(400).json({ error: "Missing required fields" });
   }
 
-  const nextId = cars.length + 1;
-
-  const newCar = {
-    id: nextId,
-    make,
-    model,
-    year: parseInt(year),
-    price: parseFloat(price),
-  };
-
-  cars.push(newCar);
-
-  res.status(201).json(newCar);
-});
-
-router.put("/cars/:id", (req, res) => {
-  const carId = parseInt(req.params.id);
-  const carIndex = cars.findIndex((c) => c.id === carId);
-
-  if (carIndex === -1) {
-    return res.status(404).json({ error: "Car not found" });
+  try {
+    const [newCar] = await db
+      .insert(cars)
+      .values({ make, model, year, price })
+      .returning();
+    res.status(201).json(newCar);
+  } catch (error) {
+    res.status(500).json({ error: "Could not save car" });
   }
-
-  const { make, model, year, price } = req.body;
-
-  if (make) cars[carIndex].make = make;
-  if (model) cars[carIndex].model = model;
-  if (year) cars[carIndex].year = parseInt(year);
-  if (price) cars[carIndex].price = parseFloat(price);
-
-  res.json(cars[carIndex]);
 });
 
-router.delete("/cars/:id", (req, res) => {
-  const carId = parseInt(req.params.id);
-  const carIndex = cars.findIndex((c) => c.id === carId);
+// PUT update car
+router.put("/:id", async (req, res) => {
+  try {
+    const carId = parseInt(req.params.id);
+    const { make, model, year, price } = req.body;
 
-  if (carIndex === -1) {
-    return res.status(404).json({ error: "Car not found" });
+    const updatedCars = await db
+      .update(cars)
+      .set({
+        make,
+        model,
+        year: year ? parseInt(year) : undefined,
+        price: price ? price.toString() : undefined,
+      })
+      .where(eq(cars.id, carId))
+      .returning();
+
+    if (updatedCars.length === 0)
+      return res.status(404).json({ error: "Car not found" });
+    res.json(updatedCars[0]);
+  } catch (error) {
+    res.status(500).json({ error: "Update failed" });
   }
-
-  const deletedCar = cars.splice(carIndex, 1)[0];
-
-  res.json({
-    message: "Car deleted successfully",
-    car: deletedCar,
-  });
 });
 
-router.get("/cars/:id", (req, res) => {
-  const carId = parseInt(req.params.id);
-  const car = cars.find((c) => c.id === carId);
+// DELETE car
+router.delete("/:id", async (req, res) => {
+  try {
+    const carId = parseInt(req.params.id);
+    const deletedCars = await db
+      .delete(cars)
+      .where(eq(cars.id, carId))
+      .returning();
 
-  if (!car) {
-    return res.status(404).json({ error: "Car not found" });
+    if (deletedCars.length === 0)
+      return res.status(404).json({ error: "Car not found" });
+    res.json({ message: "Car deleted", car: deletedCars[0] });
+  } catch (error) {
+    res.status(500).json({ error: "Delete failed" });
   }
-
-  res.json(car);
 });
 
-app.use("/api/v1", router);
+// 3. Mounting - Now all routes are under /api/v1/cars
+app.use("/api/v1/cars", router);
 
+// 4. Global Error Handler
 app.use((err, req, res, next) => {
-  console.error("Error:", err.message);
-  res.status(500).json({
-    error: "Something went wrong!",
-    message: err.message,
-  });
+  res
+    .status(500)
+    .json({ error: "Something went wrong!", message: err.message });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`🚗 Car API running at http://localhost:${PORT}/api/v1/cars`);
 });
